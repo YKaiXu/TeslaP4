@@ -76,22 +76,32 @@ source ~/ai/venv/bin/activate
 
 mkdir -p ~/models
 
-# Qwen3.5-2B Q4_K_M（本机实测最佳）
+# Qwen3-1.7B Q4_K_M（Tesla P4 首选：32K 上下文 + 工具调用完美 + 65.8 t/s）
 modelscope download \
-  --model unsloth/Qwen3.5-2B-GGUF \
-  Qwen3.5-2B-Q4_K_M.gguf \
+  --model unsloth/Qwen3-1.7B-GGUF \
+  Qwen3-1.7B-Q4_K_M.gguf \
   --local_dir ~/models/
+
+# 备选：Qwen3.5-2B（多模态场景）
+# modelscope download --model unsloth/Qwen3.5-2B-GGUF Qwen3.5-2B-Q4_K_M.gguf --local_dir ~/models/
 ```
 
-### 从 HuggingFace
+### 从 HuggingFace（HF-Mirror 加速）
 
 ```bash
 sudo apt install -y git-lfs
 git lfs install
 
-# Qwen3.5-2B Q4_K_M:
-git lfs clone https://huggingface.co/unsloth/Qwen3.5-2B-GGUF
-cp unsloth/Qwen3.5-2B-GGUF/Qwen3.5-2B-Q4_K_M.gguf ~/models/
+# 推荐：HF-Mirror 国内镜像
+export HF_ENDPOINT=https://hf-mirror.com
+huggingface-cli download unsloth/Qwen3-1.7B-GGUF \
+  Qwen3-1.7B-Q4_K_M.gguf --local-dir ~/models/
+```
+
+### 一键下载（项目自带脚本）
+
+```bash
+./scripts/convert-model.sh unsloth/Qwen3-1.7B-GGUF/Qwen3-1.7B-Q4_K_M.gguf
 ```
 
 ## 5. 性能基准测试
@@ -99,44 +109,49 @@ cp unsloth/Qwen3.5-2B-GGUF/Qwen3.5-2B-Q4_K_M.gguf ~/models/
 ```bash
 cd ~/ai/llama.cpp
 
-# 测试 prompt 处理和生成速度
+# 测试 prompt 处理和生成速度（Qwen3-1.7B）
 ./build/bin/llama-bench \
-  -m ~/models/Qwen3.5-2B-Q4_K_M.gguf \
+  -m ~/models/Qwen3-1.7B-Q4_K_M.gguf \
   -ngl 99 \
-  -p 64 -n 128
+  -p 64 -n 128 \
+  --cache-type-k q8_0 --cache-type-v q8_0
 ```
 
-预期结果（Tesla P4）：
+预期结果（Tesla P4，Qwen3-1.7B + 32K + Q8 KV Cache）：
 ```
-| model                   |       size |  params | backend | ngl |    test |              t/s |
-| ----------------------- | ---------: | ------: | ------: | --: | ------: | ---------------: |
-| qwen35 2B Q4_K - Medium |   1.18 GiB | 1.88 B  | CUDA    |  99 |    pp64 |     1215 ± 1.82 |
-| qwen35 2B Q4_K - Medium |   1.18 GiB | 1.88 B  | CUDA    |  99 |   tg128 |      67.0 ± 0.12 |
+| model                    |       size |  params | backend | ngl |    test |              t/s |
+| ------------------------ | ---------: | ------: | ------: | --: | ------: | ---------------: |
+| qwen3 1.7B Q4_K - Medium |   1.10 GiB | 1.72 B  | CUDA    |  99 |    pp64 |      668 ± 0.50 |
+| qwen3 1.7B Q4_K - Medium |   1.10 GiB | 1.72 B  | CUDA    |  99 |   tg128 |     65.8 ± 0.05 |
 ```
 
 ## 配置文件速查
 
-### 常用 llama-cli 参数
+### 常用 llama-cli 参数（Qwen3-1.7B 32K 上下文）
 
 ```bash
 ./build/bin/llama-cli \
-  -m ~/models/Qwen3.5-2B-Q4_K_M.gguf  # 模型路径
+  -m ~/models/Qwen3-1.7B-Q4_K_M.gguf   # 模型路径
   -ngl 99                               # GPU 卸载层数（99 = 全部）
-  -c 8192                               # 上下文窗口大小
+  -c 32768                              # 上下文窗口（32K）
+  --cache-type-k q8_0                   # K 缓存量化（长上下文必加）
+  --cache-type-v q8_0                   # V 缓存量化（长上下文必加）
+  --jinja                               # 启用 Jinja chat template（工具调用必加）
   -cnv                                  # 交互式对话模式
   --temp 0.7                            # 温度参数
-  --chat-template chatml                 # 对话模板
 ```
 
-### 常用 llama-server 参数
+### 常用 llama-server 参数（端口 8066，OpenAI 兼容）
 
 ```bash
 ./build/bin/llama-server \
-  -m ~/models/Qwen3.5-2B-Q4_K_M.gguf
-  -ngl 99
-  -c 8192
-  --host 0.0.0.0
+  -m ~/models/Qwen3-1.7B-Q4_K_M.gguf \
+  -ngl 99 \
+  -c 32768 \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --jinja \
+  -np 1 \
+  --host 0.0.0.0 \
   --port 8066
-  --mlock                               # 锁定内存，防止交换
-  --no-warmup                           # 跳过预热（避免 Xorg 冲突）
 ```
